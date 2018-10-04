@@ -582,9 +582,9 @@ class AE(keras.models.Model):
         self.encoder = encoder
         self.decoder = decoder
     def call(self, inputs, training=False):
-        encoder_out = self.encoder(inputs)
-        decoder_out = self.decoder(encoder_out[-1])
-
+        encoder_out = self.encoder(inputs,training=training)
+        decoder_out = self.decoder(encoder_out)
+        return
 def AE_loss(encoder_clean_outs,decoder_outs,decoder_clean_outs):
     loss_recons = []
     loss_clean_recons = []
@@ -605,17 +605,17 @@ def build_depict(input_shape, feature_map_sizes=[50, 50],
     # ENCODER
     input_layer = keras.layers.Input(shape=input_shape)
     encoder = Encoder(feature_map_sizes,
-    #                  dropouts, kernel_sizes, strides,
-    #                  paddings)
-    #     encoder_outs = encoder(input_layer,training=True)
-    #     #encoder_clean_outs = encoder(input_layer,training=False)
-    #     # DECODER
-    #     decoder_feature_map_sizes = [input_shape[-1]] + feature_map_sizes[:-2]
-    #     decoder = Decoder(encoder_outs[-2].shape, decoder_feature_map_sizes,
-    #                  kernel_sizes, strides,
-    #                  paddings)
-    #     decoder_outs = decoder(encoder_outs[-1])
-    #    # decoder_clean_outs = decoder(encoder_clean_outs[-1])
+                     dropouts, kernel_sizes, strides,
+                     paddings)
+    encoder_outs = encoder(input_layer,training=True)
+    #encoder_clean_outs = encoder(input_layer,training=False)
+    # DECODER
+    decoder_feature_map_sizes = [input_shape[-1]] + feature_map_sizes[:-2]
+    decoder = Decoder(encoder_outs[-2].shape, decoder_feature_map_sizes,
+                 kernel_sizes, strides,
+                 paddings)
+    decoder_outs = decoder(encoder_outs[-1])
+    # decoder_clean_outs = decoder(encoder_clean_outs[-1])
     ae = AE(encoder,decoder)
     #ae = keras.models.Model(inputs=input_layer,outputs=decoder.outputs[-1])
     # loss_recons = []

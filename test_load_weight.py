@@ -1,6 +1,10 @@
+import time
+
 import tensorflow as tf
 import tensorflow.keras.datasets.mnist as mnist
 import os
+import tensorflow.keras.backend as K
+import numpy as np
 flag = tf.app.flags
 img_height = 28
 img_width = 28
@@ -8,7 +12,7 @@ img_size = img_height * img_width
 output_size = 10
 
 flag.DEFINE_integer("batch_size",100,"batch size")
-flag.DEFINE_integer("iteration_step",1000,"iteration step")
+flag.DEFINE_integer("iteration_step",10000,"iteration step")
 FLAGS = flag.FLAGS
 def full_connect(input_data,output_size,scope="linear",stddev=0.02, bias_start=0.0):
     input_size = input_data.shape[-1]
@@ -23,30 +27,46 @@ if __name__ == "__main__":
     x_data = tf.placeholder(tf.float32,[None,img_height,img_width],"x_data")
     y_data = tf.placeholder(tf.int32,[None],"y_data")
     model = tf.keras.Sequential([
-        tf.keras.layers.InputLayer(input_tensor=x_data),
+        tf.keras.layers.InputLayer(input_shape=[img_height,img_width]),
+        tf.keras.layers.Lambda(lambda x:tf.expand_dims(x,axis=-1)),
+        tf.keras.layers.Conv2D(3,kernel_size=3,strides=1,padding="same",activation='relu'),
+        tf.keras.layers.MaxPooling2D(),
         tf.keras.layers.Flatten(),
         tf.keras.layers.Dense(output_size,activation=tf.nn.softmax)]
     )
+    arr = tf.constant(np.random.randn(100,2))
+    direct = tf.placeholder(dtype=tf.int32,shape=(),name="Direction")
+
+    arr_slice = arr[:80:direct]
     save_weight = "simple_weight.h5"
-    if os.path.exists(save_weight):
-        model.load_weights(save_weight)
     y_pred = model(x_data)
-    loss = tf.keras.losses.sparse_categorical_crossentropy(y_data,y_pred)
+    loss = tf.reduce_mean(tf.keras.losses.sparse_categorical_crossentropy(y_data,y_pred))
     #loss = tf.keras.losses.categorical_crossentropy
     accuracy = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(y_pred, 1,output_type=tf.int32), y_data), dtype=tf.float32))
     train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
     iter = dataset.make_one_shot_iterator()
     next_data = iter.get_next()
-    with tf.Session() as session:
-        session.run(tf.global_variables_initializer())
-        model.load_weights(save_weight)
+    start = time.time()
+    with K.get_session() as session:
+       # session.run(tf.global_variables_initializer())
+        if os.path.exists(save_weight):
+            model.load_weights(save_weight)
+        else:
+            session.run(tf.global_variables_initializer())
+        arr_slice_pre = session.run(arr_slice,feed_dict={"Direction:0":-1})
+        arr_slice_post = session.run(arr_slice, feed_dict={"Direction:0": 1})
+
         print('test accuracy %f' % accuracy.eval(feed_dict={x_data: x_test, y_data: y_test}))
+        #y_tmp_pred = model.predict(x_test)
+        #right = np.equal(np.argmax(y_tmp_pred, 1), y_test).astype(np.float32)
+       # print('model predication test accuracy %f' % np.mean(right))
         for i in range(FLAGS.iteration_step):
             x,y = session.run(next_data)
             feed_dict = {x_data: x, y_data: y}
-            train_step.run(feed_dict=feed_dict)
+            loss_val = session.run((loss,train_step),feed_dict=feed_dict)[0]
             if i%50 == 0:
                 train_accuracy = session.run(accuracy,feed_dict=feed_dict)
-                print("Accuracy: %f" % train_accuracy)
+                print("Accuracy: %f,Loss: %f " % (train_accuracy,loss_val))
         model.save_weights(save_weight,save_format='h5')
         print('test accuracy %f' % accuracy.eval(feed_dict={x_data: x_test, y_data: y_test}))
+    print(time.time()-start,"sec")

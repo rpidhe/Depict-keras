@@ -1,0 +1,12 @@
+Namespace(architecture_visualization_flag=1, batch_size=100, cluster_hyperparam=1.0, continue_training=True, dataset_name='MNIST-test', datasets_path='F:/Project/Commodity and Logo Recognization/AI_JD/crop_dataset/pair_show_new/', learning_rate=0.0001, loss_acc_plt_flag=1, n_clusters=3, num_epochs=4000, reconstruct_hyperparam=1.0, seed=42, verbose=1)
+----------
+['G:/JProjects/keras/Depict-keras/DEPICT.py']
+dataset: MNIST-test 	num_samples: 10000 	num_clusters: 10
+
+... build DEPICT model...
+feature_map_sizes: [50, 50, 10] 	dropouts: [0.1, 0.1, 0.0] 	kernel_sizes: [4, 5] 	strides: [2, 2] 	paddings: ['same', 'same']
+
+...Start AutoEncoder training...
+
+Start preclustering
+k-means: 	 nmi = 0.6656659467068885 	 arc = 0.5957074678114718 	 acc = 0.7340  K-means objective = 892.0  	 runtime = 4.800627919998377

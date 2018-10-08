@@ -64,7 +64,9 @@ if __name__ == "__main__":
             x,y = session.run(next_data)
             feed_dict = {x_data: x, y_data: y}
             loss_val = session.run((loss,train_step),feed_dict=feed_dict)[0]
+            vars = model.variables
             if i%50 == 0:
+
                 train_accuracy = session.run(accuracy,feed_dict=feed_dict)
                 print("Accuracy: %f,Loss: %f " % (train_accuracy,loss_val))
         model.save_weights(save_weight,save_format='h5')

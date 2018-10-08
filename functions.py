@@ -122,7 +122,7 @@ def gacMerging(graphW, initClusters, groupNumber, strDescr, z):
 
     curGroupNum = numClusters
     while True:
-        if np.mod(curGroupNum, 20) == 0 & VERBOSE:
+        if np.mod(curGroupNum, 20) == 0 and VERBOSE:
             print('   Group count: ', str(curGroupNum))
 
         # Find two clusters with the best affinity
@@ -338,7 +338,7 @@ def bestMap(L1, L2):
 
 
 def dataset_settings(dataset):
-    if (dataset == 'MNIST-full') | (dataset == 'MNIST-test'):
+    if (dataset == 'MNIST-full') or (dataset == 'MNIST-test'):
         kernel_sizes = [4, 5]
         strides = [2, 2]
         paddings = ['same', 'same']
@@ -431,15 +431,11 @@ def kmeans(encoder_val_clean, y, nClusters, y_pred_prev=None, weight_initilizati
                               random_state=seed)
         y_pred = kmeans_model.fit_predict(encoder_val_clean)
 
-        D = 1.0 / euclidean_distances(encoder_val_clean, kmeans_model.cluster_centers_, squared=True)
-        D **= 2.0 / (2 - 1)
-        D /= np.sum(D, axis=1)[:, np.newaxis]
-
         centroids = kmeans_model.cluster_centers_.T
         centroids = centroids / np.sqrt(np.diag(np.matmul(centroids.T, centroids)))
 
         end_time = timeit.default_timer()
-    if y[0] > 0:
+    if y[0] >= 0:
         print('k-means: \t nmi =', normalized_mutual_info_score(y, y_pred), '\t arc =', adjusted_rand_score(y, y_pred),
               '\t acc = {:.4f} '.format(bestMap(y, y_pred)),
               'K-means objective = {:.1f} '.format(kmeans_model.inertia_), '\t runtime =', end_time - start_time)
@@ -465,7 +461,7 @@ def parse_function(filename,size):
     img = tf.cast(img,tf.float32)
     img = tf.image.resize_images(img,[size,size])
     img = img / 127.5 - 1
-    return img,-1
+    return img
 
 def iterate_minibatches(inputs, targets, batchsize, shuffle=False):
     assert len(inputs) == len(targets)
@@ -550,7 +546,7 @@ class Decoder(tf.keras.Model):
                 activation = keras.activations.tanh
             l_di = keras.layers.Conv2DTranspose(filters=feature_map_sizes[-i-1],kernel_size=kernel_sizes[-i-1],strides=strides[-i-1],padding=paddings[-i-1],activation=activation)
             self.top_layers.append(l_di)
-    def call(self, x):
+    def call(self, x,training=False):
         # x shape == (bs, 256, 256, 3)
         outputs = []
         x = self.first_layer(x)
@@ -563,7 +559,7 @@ class Decoder(tf.keras.Model):
 
 class AE(keras.models.Model):
     def __init__(self,encoder,decoder):
-        super(AE, self).__init__(inputs=encoder.inputs,outputs=decoder.outputs[-1])
+        super(AE, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
     def call(self, inputs, training=False):
@@ -575,7 +571,7 @@ def AE_loss(encoder_outs,decoder_outs):
     loss_recons = []
     for i in range(len(decoder_outs)):
         loss_recons.append(
-            tf.losses.mean_squared_error(decoder_outs[i], decoder_outs[-i - 2])
+            tf.losses.mean_squared_error(decoder_outs[i], encoder_outs[-i - 2])
         )
     loss_recon = sum(loss_recons)
     return loss_recon
@@ -610,42 +606,64 @@ def build_depict(input_var, feature_map_sizes=[50, 50],
     # loss_clean_recons = sum(loss_clean_recons)
     return ae #, loss_recon, loss_clean_recons
 
-
-def train_depict_ae(dataset_name, dataset,dataset_val, ae,input_var, num_clusters, output_path,
+def train_depict_ae(dataset_name,dataset_full,y, ae,input_var, num_clusters, output_path,val_size,
                     batch_size=100, test_batch_size=100, num_epochs=1000, learning_rate=1e-4, verbose=1, seed=42,
                     continue_training=False):
-    encoder_outs, decoder_outs = ae(input_var, training=True)
-    encoder_clean_outs, decoder_clean_outs = ae(input_var,training=False)
+    split = len(ae.encoder.outputs)
+    ae_outs = ae(input_var, training=True)
+    encoder_outs = ae_outs[:split]
+    decoder_outs = ae_outs[split:]
+    ae_outs_clean = ae(input_var,training=False)
+    encoder_clean_outs =  ae_outs_clean[:split]
+    decoder_clean_outs = ae_outs_clean[split:]
     loss_recon = AE_loss(encoder_clean_outs,decoder_outs)
     loss_clean_recon = AE_loss(encoder_clean_outs,decoder_clean_outs)
-    weight_save_path = os.path.join(output_path, '../params/params_' + dataset_name + '_values_best.h5')
+    best_weight_save_path = os.path.join(output_path, '../params/params_' + dataset_name + '_values_best.h5')
     best_val = np.inf
     last_update = 0
-    keras.Model().predict()
     # Load if pretrained weights are available.
-    if os.path.isfile(weight_save_path) & continue_training:
-        ae.load_weights(weight_save_path)
-        return
+    if os.path.exists(best_weight_save_path) and continue_training:
+        #ae.load_weights(best_weight_save_path)
+        pass
     else:
         # TRAIN MODEL
         if verbose > 1:
             encoder_clean = encoder_clean_outs[-1]
-        iterator = dataset.make_initializable_iterator()
+
+        dataset_train = dataset_full.skip(val_size).shuffle(2000).batch(batch_size)
+        iterator = dataset_train.make_initializable_iterator()
         next_batch = iterator.get_next()
-        val_batch = dataset_val.make_one_shot_iterator().get_next()
+
+        dataset_val = dataset_full.take(val_size).batch(test_batch_size)
+        val_iterator = dataset_val.make_initializable_iterator()
+        val_batch = val_iterator.get_next()
+
+        dataset_pred = dataset_full.batch(test_batch_size)
+        pred_iterator = dataset_pred.make_initializable_iterator()
+        pred_batch = pred_iterator.get_next()
+        tf.summary.scalar("Loss_recon",loss_recon)
+        tf.summary.image("Reconstructed images",decoder_clean_outs[-1])
+        summery_op = tf.summary.merge_all()
         optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
         train_op = optimizer.minimize(loss_recon)
-        with K.get_session() as sess:
-            sess.run(tf.global_variables_initializer())
-            inputs_val = sess.run(val_batch)
+        with tf.Session() as sess:
+            if os.path.exists(best_weight_save_path):
+                ae.load_weights(best_weight_save_path)
+            else:
+                sess.run(tf.global_variables_initializer())
+            summery_writer = tf.summary.FileWriter(logdir=os.path.join(output_path,"log"),graph=sess.graph)
             for epoch in range(num_epochs + 1):
                 start = time.time()
                 sess.run(iterator.initializer)
+                sess.run(val_iterator.initializer)
                 num_batches = 0
                 train_err = 0
                 while True:
                     try:
-                        inputs, labels = sess.run(next_batch)
+                        inputs = sess.run(next_batch)
+                        if num_batches == 0:
+                            summery = sess.run(summery_op,{input_var:inputs})
+                            summery_writer.add_summary(summery,global_step=epoch)
                         # summery = sess.run([summery_op,gen_output],feed_dict={input_image_holder:input_image,target_placeholder:target})
                         train_err += sess.run([loss_recon,train_op],feed_dict={input_var:inputs})[0]
                         # if step % 10 == 0:
@@ -653,72 +671,80 @@ def train_depict_ae(dataset_name, dataset,dataset_val, ae,input_var, num_cluster
                         num_batches += 1
                     except tf.errors.OutOfRangeError:
                         break
-                valation_error = sess.run(loss_clean_recon,feed_dict={input_var:inputs_val})
+                vaildation_error = 0
+                num_batches_val = 0
+                while True:
+                    try:
+                        inputs = sess.run(val_batch)
+                        # summery = sess.run([summery_op,gen_output],feed_dict={input_image_holder:input_image,target_placeholder:target})
+                        vaildation_error += sess.run(loss_clean_recon,feed_dict={input_var:inputs})
+                        # if step % 10 == 0:
+                        #     summery_writer.add_summary(summery, global_step=step)
+                        num_batches_val += 1
+                    except tf.errors.OutOfRangeError:
+                        break
                 print("Epoch {} of {}".format(epoch + 1, num_epochs),
                       "\t  training loss:{:.6f}".format(train_err / num_batches),
-                      "\t  valation loss:{:.6f}".format(valation_error),
-                        "\t  time:{:.2f sec}".format(time.time()-start))
+                      "\t  valation loss:{:.6f}".format(vaildation_error/ num_batches_val),
+                        "\t  time: {:.2f} sec".format(time.time()-start))
                 # if epoch % 10 == 0:
                 last_update += 1
-                if valation_error < best_val:
+                if vaildation_error < best_val:
                     last_update = 0
-                    print("new best error: ", valation_error)
-                    best_val = valation_error
-                    ae.save_weights(weight_save_path)
-                if last_update > 50:
+                    print("new best error: ", vaildation_error)
+                    best_val = vaildation_error
+                    ae.save_weights(best_weight_save_path)
+                if last_update > 100:
                     break
 
-                if (verbose > 1) & (epoch % 50 == 0) & labels[0] != -1:
+                if (verbose > 1) and (epoch % 50 == 0) and y[0] != -1:
                     # Extract MdA features
                     encoder_val_clean = []
-                    y = []
+                    sess.run(pred_iterator.initializer)
                     while True:
                         try:
-                            inputs, labels = sess.run(next_batch)
+                            inputs = sess.run(pred_batch)
                             minibatch_x = sess.run(encoder_clean,feed_dict={input_var:inputs})
                             encoder_val_clean.append(minibatch_x)
-                            y.append(labels)
 
                         except tf.errors.OutOfRangeError:
                             break
                     encoder_val_clean = np.concatenate(encoder_val_clean, axis=0)
-                    y = np.concatenate(y, axis=0)
                     kmeans(encoder_val_clean, y, num_clusters, seed=seed)
-        last_weight_path = os.path.join(output_path, '../params/params_' + dataset_name + '_values_last.h5')
-        ae.save_weights(last_weight_path)
+            last_weight_path = os.path.join(output_path, '../params/params_' + dataset_name + '_values_last.h5')
+            ae.save_weights(last_weight_path)
+        #ae.load_weights(best_weight_save_path)
         #lasagne.layers.set_all_param_values(decoder, best_params_values)
-
-def clustering(dataset_name,dataset,input_var, encoder, num_clusters, output_path, test_batch_size=100, seed=42,
+    return best_weight_save_path
+def clustering(dataset_name,dataset_full,y,input_var, ae, num_clusters,best_weight_save_path, output_path, test_batch_size=100, seed=42,
                continue_training=False):
-    encoder_clean = encoder(input_var,training=False)[-1]
+    encoder_clean = ae.encoder(input_var,training=False)[-1]
     encoder_val_clean = []
-    y = []
-    iterator_training = dataset.make_one_shot_iterator()
+    iterator_training = dataset_full.batch(test_batch_size).make_one_shot_iterator()
     next_batch_training = iterator_training.get_next()
     dataset_train_size = 0
-    with K.get_session() as sess:
-        while True:
-            try:
-                inputs, labels = sess.run(next_batch_training)
-                minibatch_x = sess.run(encoder_clean,feed_dict={input_var:inputs})
-                encoder_val_clean.append(minibatch_x)
-                y.append(labels)
-            except tf.errors.OutOfRangeError:
-                break
-        encoder_val_clean = np.concatenate(encoder_val_clean, axis=0)
-        y = np.concatenate(y, axis=0)
+    print("\nStart preclustering")
+    sess = K.get_session()
+    ae.load_weights(best_weight_save_path)
+    while True:
+        try:
+            inputs = sess.run(next_batch_training)
+            minibatch_x = sess.run(encoder_clean,feed_dict={input_var:inputs})
+            encoder_val_clean.append(minibatch_x)
+        except tf.errors.OutOfRangeError:
+            break
+    encoder_val_clean = np.concatenate(encoder_val_clean, axis=0)
     # Extract MdA features
     # Check kmeans results
-    kmeans(encoder_val_clean, y, num_clusters, seed=seed)
+  #  kmeans(encoder_val_clean, y, num_clusters, seed=seed)
     initial_time = timeit.default_timer()
-    if (dataset_name == 'MNIST-full') | (dataset_name == 'MNIST-test')| (dataset_name == 'FRGC') | (dataset_name == 'YTF') | (dataset_name == 'CMU-PIE') | (dataset_name == 'JD'):
+    if (dataset_name == 'MNIST-full') or (dataset_name == 'MNIST-test')or (dataset_name == 'FRGC') or (dataset_name == 'YTF') or (dataset_name == 'CMU-PIE') or (dataset_name == 'JD'):
         # K-means on MdA Features
         centroids, inertia, y_pred = kmeans(encoder_val_clean, y, num_clusters, seed=seed)
         y_pred = (np.array(y_pred)).reshape(np.array(y_pred).shape[0], )
-        y_pred = y_pred - 1
     else:
         # AC-PIC on MdA Features
-        if os.path.exists(os.path.join(output_path, '../params/pred' + dataset_name + '.pickle')) & continue_training:
+        if os.path.exists(os.path.join(output_path, '../params/pred' + dataset_name + '.pickle')) and continue_training:
             with open(os.path.join(output_path, '../params/pred' + dataset_name + '.pickle'), "rb") as input_file:
                 y_pred = pickle.load(input_file, encoding='latin1')
         else:
@@ -761,11 +787,11 @@ def build_eml(n_out, W_initial=None):
             n_out,activation=keras.activations.softmax,bias_initializer='ones')
     else:
         l_out = keras.layers.Dense(
-            n_out,activation=keras.activations.softmax,kernel_initializer=W_initial)
+            n_out,activation=keras.activations.softmax,kernel_initializer=lambda shape,dtype,partition_info:W_initial)
     return l_out
     #return keras.Model(inputs=encoder.inputs,outputs=l_out(encoder.outputs[-1]))
 
-def train_depict(dataset_name, dataset_pred_train,dataset_pred_val, input_var, ae, num_clusters, y_pred_training,y_pred_val, output_path,
+def train_depict(dataset_name,  dataset_full,y,y_pred, input_var,val_size, ae, num_clusters,ae_best_weight_save_path, output_path,
                  batch_size=100, test_batch_size=100, num_epochs=1000, learning_rate=1e-4, prediction_status='soft',
                  rec_mult=1, clus_mult=1, centroids=None, init_flag=1, continue_training=False):
     ######################
@@ -773,245 +799,193 @@ def train_depict(dataset_name, dataset_pred_train,dataset_pred_val, input_var, a
     #   ADD RLC TO MdA   #
     ######################
 
-    initial_time = timeit.default_timer()
+  #  initial_time = timeit.default_timer()
     rec_lambda = rec_mult
     clus_lambda = clus_mult
     pred_normalizition_flag = 1
-    num_batches = X.shape[0] // batch_size
     target_init = tf.placeholder(dtype=tf.int32,shape=[None])
     target_var = tf.placeholder(dtype=tf.float32,shape=[None,num_clusters])
-    encoder_outs, decoder_outs = ae(input_var, training=True)
+    split = len(ae.encoder.outputs)
+    ae_outs = ae(input_var, training=True)
+    encoder_outs = ae_outs[:split]
+    decoder_outs = ae_outs[split:]
     encoder_clean_outs = ae.encoder(input_var, training=False)
 
     classifier = build_eml(n_out=num_clusters, W_initial=centroids)
-    network_prediction_noisy = classifier(encoder_outs[-1],training=True)
-    network_prediction_clean = classifier(encoder_clean_outs[-1], training=False)
+    network_prediction_noisy = classifier(encoder_outs[-1])
+    network_prediction_clean = classifier(encoder_clean_outs[-1])
     whole_model = keras.Model(inputs=ae.inputs,outputs=[ae.decoder.outputs[-1],classifier(ae.encoder.outputs[-1])])
 
     loss_clus_init = tf.reduce_mean(keras.losses.sparse_categorical_crossentropy(target_init,network_prediction_noisy))
     #params_init = lasagne.layers.get_all_params([decoder, network2], trainable=True)
     #`soft`目标是每个类都有一个概率，hard只有一个类的概率为1
-    loss_clus = tf.reduce_mean(keras.losses.categorical_crossentropy(network_prediction_noisy,
-                                                                target_var))
+    loss_clus = tf.reduce_mean(keras.losses.categorical_crossentropy(target_var,
+                                                                     network_prediction_noisy))
     loss_recons = AE_loss(encoder_clean_outs,decoder_outs)
-    loss = clus_lambda * loss_recons + rec_lambda * loss_clus
+    loss = rec_lambda* loss_recons + clus_lambda * loss_clus
     adam = tf.train.AdamOptimizer(learning_rate=learning_rate)
     train_op = adam.minimize(loss)
-    params2 = lasagne.layers.get_all_params([decoder, network2], trainable=True)
-    updates = lasagne.updates.adam(
-        loss, params2, learning_rate=learning_rate)
-    train_fn = theano.function([input_var, target_var],
-                               [loss, loss_recons, loss_clus], updates=updates)
-    loss_init = clus_lambda * loss_recons + rec_lambda * loss_clus_init
-    train_op_init = adam.minimize(loss_init)
-    updates_init = lasagne.updates.adam(
-        loss_init, params_init, learning_rate=learning_rate)
-    train_fn_init = theano.function([input_var, target_init],
-                                    [loss_init, loss_recons, loss_clus_init], updates=updates_init)
-
-    test_fn = theano.function([input_var], network_prediction_clean)
-    final_time = timeit.default_timer()
+    loss_init = rec_lambda * loss_recons + clus_lambda * loss_clus_init
+    adam_init = tf.train.AdamOptimizer(learning_rate=learning_rate)
+    train_op_init = adam_init.minimize(loss_init)
     weight_path = os.path.join(output_path, '../params/weights_' + dataset_name + '.h5')
     print("\n...Start DEPICT initialization")
     if init_flag:
-        if os.path.exists(weight_path) & continue_training:
-            whole_model.load_weights(weight_path)
+        if os.path.exists(weight_path) and continue_training:
+            pass
         else:
-            iter_train = dataset_pred_train.make_initializable_iterator()
-            iter_val = dataset_pred_val.make_initializable_iterator()
+            y_targ_val = y_pred[:val_size]
+            y_targ_train = y_pred[val_size:]
+            dataset_train_init = tf.data.Dataset.zip((dataset_full,tf.data.Dataset.from_tensor_slices(y_pred))).skip(val_size).shuffle(2000).batch(batch_size)
+            dataset_val_init = dataset_full.take(val_size).batch(test_batch_size)
+            iter_train = dataset_train_init.make_initializable_iterator()
+            iter_val = dataset_val_init.make_initializable_iterator()
+            iter_full = dataset_full.batch(test_batch_size).make_initializable_iterator()
             next_batch_val = iter_val.get_next()
             next_batch_training = iter_train.get_next()
-            with K.get_session() as sess:
-                sess.run(tf.variables_initializer(classifier.variables()))
-                sess.run(iter_val.initalizer,feed_dict={"Pred_train:0":y_pred_val})
-                inputs_val,inputs_labels_val,input_pred_val = sess.run(next_batch_val)
-                for epoch in range(1000):
-                    num_batches_train = 0
-                    train_err, val_err = 0, 0
-                    lossre_train, lossre_val = 0, 0
-                    losspre_train, losspre_val = 0, 0
-                    num_batches_train = 0
-                    while True:
-                        try:
-                            inputs, y_labels,y_pred = sess.run(next_batch_training)
-                            minibatch_error, lossrec, losspred = sess.run([loss_init, loss_recons, loss_clus_init, train_op], feed_dict={input_var: inputs})[:-1]
+            next_batch_full = iter_full.get_next()
+            sess = K.get_session()
 
-                            # if step % 10 == 0:
-                            #     summery_writer.add_summary(summery, global_step=step)
-                            train_err += minibatch_error
-                            lossre_train += lossrec
-                            losspre_train += losspred
-                            num_batches_train += 1
-                        except tf.errors.OutOfRangeError:
-                            break
-                    y_val_prob = sess.run(network_prediction_clean,feed_dict={input_var:inputs_val})
-                    y_val_pred = np.argmax(y_val_prob, axis=1)
+            sess.run(tf.global_variables_initializer())
+            ae.load_weights(ae_best_weight_save_path)
 
-                    y_pred = np.zeros(X.shape[0])
-                    for batch in iterate_minibatches(X, y, test_batch_size, shuffle=False):
-                        minibatch_inputs, targets, idx = batch
-                        minibatch_prob = test_fn(minibatch_inputs)
-                        minibatch_pred = np.argmax(minibatch_prob, axis=1)
-                        y_pred[idx] = minibatch_pred
-                    val_nmi = normalized_mutual_info_score(y_targ_val, y_val_pred)
-
-                    print('epoch:', epoch + 1, '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
-                          '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
-                          '\t acc = {:.4f} '.format(bestMap(y, y_pred)),
-                          '\t loss= {:.10f}'.format(train_err / num_batches_train),
-                          '\t loss_reconstruction= {:.10f}'.format(lossre_train / num_batches_train),
-                          '\t loss_prediction= {:.10f}'.format(losspre_train / num_batches_train),
-                          '\t val nmi = {:.4f}  '.format(val_nmi))
-                    last_update += 1
-                    if val_nmi > best_val:
-                        last_update = 0
-                        print("new best val nmi: ", val_nmi)
-                        best_val = val_nmi
-                        best_params_values = lasagne.layers.get_all_param_values([decoder, network2])
-                        # if (losspre_val / num_batches_val) < 0.2:
-                        #     break
-
-                    if last_update > 5:
-                        break
             last_update = 0
-            # Initilization
-            y_targ_train = np.copy(y_pred_train)
-            y_targ_val = np.copy(y_pred_val)
-            y_val_prob = test_fn(X_val)
-            y_val_pred = np.argmax(y_val_prob, axis=1)
-            val_nmi = normalized_mutual_info_score(y_targ_val, y_val_pred)
-            best_val = val_nmi
-            print('initial val nmi: ', val_nmi)
-            best_params_values = lasagne.layers.get_all_param_values([decoder, network2])
+            best_val = 0
             for epoch in range(1000):
+                sess.run(iter_train.initializer)
+                sess.run(iter_val.initializer)
                 train_err, val_err = 0, 0
                 lossre_train, lossre_val = 0, 0
                 losspre_train, losspre_val = 0, 0
                 num_batches_train = 0
-                for batch in iterate_minibatches(X_train, y_train, batch_size, shuffle=True):
-                    minibatch_inputs, targets, idx = batch
-                    minibatch_error, lossrec, losspred = train_fn_init(minibatch_inputs, np.int32(y_targ_train[idx]))
-                    train_err += minibatch_error
-                    lossre_train += lossrec
-                    losspre_train += losspred
-                    num_batches_train += 1
-
-                y_val_prob = test_fn(X_val)
+                epoch_start = time.time()
+                while True:
+                    try:
+                        inputs,tar = sess.run(next_batch_training)
+                        minibatch_error, lossrec, losspred = sess.run([loss_init, loss_recons, loss_clus_init, train_op_init], feed_dict={input_var: inputs,target_init:tar})[:-1]
+                        # if step % 10 == 0:
+                        #     summery_writer.add_summary(summery, global_step=step)
+                        train_err += minibatch_error
+                        lossre_train += lossrec
+                        losspre_train += losspred
+                        num_batches_train += 1
+                    except tf.errors.OutOfRangeError:
+                        break
+                y_val_prob = []
+                while True:
+                    try:
+                        inputs = sess.run(next_batch_val)
+                        y_val_prob.append(sess.run(network_prediction_clean, feed_dict={input_var: inputs}))
+                    except tf.errors.OutOfRangeError:
+                        break
+                y_val_prob = np.concatenate(y_val_prob)
                 y_val_pred = np.argmax(y_val_prob, axis=1)
-
-                y_pred = np.zeros(X.shape[0])
-                for batch in iterate_minibatches(X, y, test_batch_size, shuffle=False):
-                    minibatch_inputs, targets, idx = batch
-                    minibatch_prob = test_fn(minibatch_inputs)
-                    minibatch_pred = np.argmax(minibatch_prob, axis=1)
-                    y_pred[idx] = minibatch_pred
-
                 val_nmi = normalized_mutual_info_score(y_targ_val, y_val_pred)
-
-                print('epoch:', epoch + 1, '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
-                      '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
-                      '\t acc = {:.4f} '.format(bestMap(y, y_pred)),
+                print('epoch:', epoch + 1,
                       '\t loss= {:.10f}'.format(train_err / num_batches_train),
                       '\t loss_reconstruction= {:.10f}'.format(lossre_train / num_batches_train),
                       '\t loss_prediction= {:.10f}'.format(losspre_train / num_batches_train),
-                      '\t val nmi = {:.4f}  '.format(val_nmi))
+                      '\t val nmi = {:.4f}  '.format(val_nmi),
+                      '\t time = {:.2f} sec'.format(time.time()-epoch_start),
+                      )
+                if (epoch % 50 == 0) and y[0] != -1:
+                    sess.run(iter_full.initializer)
+                    y_pred_train = []
+                    while True:
+                        try:
+                            inputs = sess.run(next_batch_full)
+                            minibatch_prob = sess.run(network_prediction_clean, feed_dict={input_var: inputs})
+                            minibatch_pred = np.argmax(minibatch_prob,axis=1)
+                            y_pred_train.append(minibatch_pred)
+                        except tf.errors.OutOfRangeError:
+                            break
+                    y_pred_train = np.concatenate(y_pred_train)
+                    print('epoch:', epoch + 1, '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred_train)),
+                          '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred_train)),
+                          '\t acc = {:.4f} '.format(bestMap(y, y_pred_train)))
                 last_update += 1
                 if val_nmi > best_val:
                     last_update = 0
                     print("new best val nmi: ", val_nmi)
                     best_val = val_nmi
-                    best_params_values = lasagne.layers.get_all_param_values([decoder, network2])
-                    # if (losspre_val / num_batches_val) < 0.2:
-                    #     break
-
+                    whole_model.save_weights(weight_path)
                 if last_update > 5:
                     break
-
-            lasagne.layers.set_all_param_values([decoder, network2], best_params_values)
-            with open(os.path.join(output_path, '../params/weights' + dataset + '.pickle'), "wb") as output_file:
-                pickle.dump(lasagne.layers.get_all_param_values([decoder, network2]), output_file)
-
     # Epoch 0
     print("\n...Start DEPICT training")
-    y_prob = np.zeros((X.shape[0], num_clusters))
-    y_prob_prev = np.zeros((X.shape[0], num_clusters))
-    for batch in iterate_minibatches(X, y, test_batch_size, shuffle=False):
-        minibatch_inputs, targets, idx = batch
-        minibatch_prob = test_fn(minibatch_inputs)
-        y_prob[idx] = minibatch_prob
+    dataset_train = tf.data.Dataset.zip((dataset_full,tf.data.Dataset.range(y.shape[0]))).shuffle(2000).batch(batch_size)
+    iter_train = dataset_train.make_initializable_iterator()
+    next_batch_training = iter_train.get_next()
 
-    y_prob_max = np.max(y_prob, axis=1)
-    if pred_normalizition_flag:
-        cluster_frequency = np.sum(y_prob, axis=0)
-        y_prob = y_prob ** 2 / cluster_frequency
-        y_prob = np.transpose(y_prob.T / np.sum(y_prob, axis=1))
-    y_pred = np.argmax(y_prob, axis=1)
-
-    print('epoch: 0', '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
-          '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
-          '\t acc = {:.4f} '.format(bestMap(y, y_pred)))
-    if os.path.isfile(os.path.join(output_path, '../params/rlc' + dataset + '.pickle')) & continue_training:
-        with open(os.path.join(output_path, '../params/rlc' + dataset + '.pickle'),
-                  "rb") as input_file:
-            weights = pickle.load(input_file, encoding='latin1')
-            lasagne.layers.set_all_param_values([decoder, network2], weights)
+    rlc_weight_path = os.path.join(output_path, '../params/rlc_' + dataset_name + '.h5')
+    if os.path.isfile(rlc_weight_path) and continue_training:
+        whole_model.load_weights(rlc_weight_path)
     else:
+        sess = K.get_session()
+        sess.run(tf.global_variables_initializer())
+        whole_model.load_weights(weight_path)
+        y_prob = np.zeros((y.shape[0], num_clusters))
         for epoch in range(num_epochs):
+            epoch_start = time.time()
+            y_prob_prev = np.copy(y_prob)
+            sess.run(iter_train.initializer)
+            while True:
+                try:
+                    inputs,idx = sess.run(next_batch_training)
+                    y_prob[idx] = sess.run(network_prediction_clean,feed_dict={input_var:inputs})
+                except tf.errors.OutOfRangeError:
+                    break
+           # y_prob_max = np.max(y_prob, axis=1)
+            if pred_normalizition_flag:
+                cluster_frequency = np.sum(y_prob, axis=0)
+                y_prob = y_prob ** 2 / cluster_frequency
+                y_prob = np.transpose(y_prob.T / np.sum(y_prob, axis=1))
+            y_pred = np.argmax(y_prob, axis=1)
 
             # In each epoch, we do a full pass over the training data:
             train_err = 0
             lossre = 0
             losspre = 0
+            num_batches = 0
+            sess.run(iter_train.initializer)
+            while True:
+                try:
+                    inputs, idx = sess.run(next_batch_training)
+                    minibatch_err, lossrec, losspred = sess.run([loss, loss_recons, loss_clus, train_op], feed_dict={input_var: inputs,target_var:y_prob[idx]})[:-1]
+                    train_err += minibatch_err
+                    lossre += lossrec
+                    losspre += losspred
+                    num_batches += 1
+                except tf.errors.OutOfRangeError:
+                    break
 
-            for batch in iterate_minibatches(X, y, batch_size, shuffle=True):
-                minibatch_inputs, targets, idx = batch
-
-                # M_step
-                if prediction_status == 'hard':
-                    minibatch_err, lossrec, losspred = train_fn(minibatch_inputs,
-                                                                np.ndarray.astype(y_pred[idx], 'int32'),
-                                                                np.ndarray.astype(y_prob_max[idx],
-                                                                                  'float32'))
-                elif prediction_status == 'soft':
-                    minibatch_err, lossrec, losspred = train_fn(minibatch_inputs,
-                                                                np.ndarray.astype(y_prob[idx], 'float32'))
-
-                minibatch_prob = test_fn(minibatch_inputs)
-                y_prob[idx] = minibatch_prob
-                train_err += minibatch_err
-                lossre += lossrec
-                losspre += losspred
-
-            y_prob_max = np.max(y_prob, axis=1)
-            if pred_normalizition_flag:
-                cluster_frequency = np.sum(y_prob, axis=0)  # avoid unbalanced assignment
-                y_prob = y_prob ** 2 / cluster_frequency
-                # y_prob = y_prob / np.sqrt(cluster_frequency)
-                y_prob = np.transpose(y_prob.T / np.sum(y_prob, axis=1))
-            y_pred = np.argmax(y_prob, axis=1)
-
-            # print('mse: ', mean_squared_error(y_prob, y_prob_prev))
-
-            if mean_squared_error(y_prob, y_prob_prev) < 1e-7:
-                with open(os.path.join(output_path, '../params/rlc' + dataset + '.pickle'), "wb") as output_file:
-                    pickle.dump(lasagne.layers.get_all_param_values([decoder, network2]), output_file)
+            print('mse: ', mean_squared_error(y_prob, y_prob_prev))
+            if epoch > 0 and mean_squared_error(y_prob, y_prob_prev) < 1e-7:
+                whole_model.save_weights(rlc_weight_path)
                 break
-            y_prob_prev = np.copy(y_prob)
-
-            print('epoch:', epoch + 1, '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
-                  '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
-                  '\t acc = {:.4f} '.format(bestMap(y, y_pred)), '\t loss= {:.10f}'.format(train_err / num_batches),
+            print('epoch:', epoch + 1, '\t loss= {:.10f}'.format(train_err / num_batches),
                   '\t loss_recons= {:.10f}'.format(lossre / num_batches),
                   '\t loss_pred= {:.10f}'.format(losspre / num_batches))
-
+            if y[0] >= 0:
+                print('\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
+                  '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
+                  '\t acc = {:.4f} '.format(bestMap(y, y_pred)))
+            print('\t time= {:.2f} sec'.format(time.time()-epoch_start))
     # test
-    y_pred = np.zeros(X.shape[0])
-    for batch in iterate_minibatches(X, y, test_batch_size, shuffle=False):
-        minibatch_inputs, targets, idx = batch
-        minibatch_prob = test_fn(minibatch_inputs)
-        minibatch_pred = np.argmax(minibatch_prob, axis=1)
-        y_pred[idx] = minibatch_pred
-
-    print('final: ', '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
-          '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
-          '\t acc = {:.4f} '.format(bestMap(y, y_pred)))
+    print("\n...Test DEPICT")
+    y_pred = np.zeros(y.shape[0])
+    with K.get_session() as sess:
+        sess.run(iter_train.initializer)
+        while True:
+            try:
+                inputs, idx = sess.run(next_batch_training)
+                minibatch_prob = sess.run(network_prediction_clean, feed_dict={input_var: inputs})
+                y_pred[idx] = np.argmax(minibatch_prob, axis=1)
+            except tf.errors.OutOfRangeError:
+                break
+        predict_result_path = os.path.join(output_path,'labels.npy')
+        np.save(predict_result_path,y_pred)
+        if y[0]>=0:
+            print('final: ', '\t nmi = {:.4f}  '.format(normalized_mutual_info_score(y, y_pred)),
+                '\t arc = {:.4f} '.format(adjusted_rand_score(y, y_pred)),
+                '\t acc = {:.4f} '.format(bestMap(y, y_pred)))
